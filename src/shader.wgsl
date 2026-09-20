@@ -17,7 +17,8 @@ struct VertexOutput {
 
 struct Params {
     screen_resolution: vec2<u32>,
-    _pad: vec2<u32>,
+    coverage_gamma: f32,
+    _pad: u32,
 };
 
 @group(0) @binding(0)
@@ -119,7 +120,16 @@ fn fs_main(in_frag: VertexOutput) -> @location(0) vec4<f32> {
             return textureSampleLevel(color_atlas_texture, atlas_sampler, in_frag.uv, 0.0);
         }
         case 1u: {
-            return vec4<f32>(in_frag.color.rgb, in_frag.color.a * textureSampleLevel(mask_atlas_texture, atlas_sampler, in_frag.uv, 0.0).x);
+            var coverage = textureSampleLevel(mask_atlas_texture, atlas_sampler, in_frag.uv, 0.0).x;
+            // Coverage blends in whatever space the target is in. On a linear
+            // target, dark text on a light background loses its partly covered
+            // pixels and reads thin, while light on dark gains. A gamma below
+            // 1.0 gives those pixels back. The branch keeps the untouched case
+            // bit-for-bit what it was.
+            if params.coverage_gamma != 1.0 {
+                coverage = pow(coverage, params.coverage_gamma);
+            }
+            return vec4<f32>(in_frag.color.rgb, in_frag.color.a * coverage);
         }
         default: {
             return vec4<f32>(0.0);

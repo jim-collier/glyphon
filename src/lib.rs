@@ -73,10 +73,14 @@ pub struct Resolution {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+// No Eq: coverage_gamma is a float. Nothing compares the whole struct.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Params {
     screen_resolution: Resolution,
-    _pad: [u32; 2],
+    /// Exponent applied to mask-atlas coverage before it becomes alpha. 1.0
+    /// leaves coverage alone; below 1.0 thickens partly covered pixels.
+    coverage_gamma: f32,
+    _pad: u32,
 }
 
 /// Controls the visible area of the text. Any text outside of the visible area will be clipped.
@@ -127,4 +131,28 @@ pub struct TextArea<'a> {
 pub(crate) struct State<'a> {
     pub(crate) device: &'a Device,
     pub(crate) queue: &'a Queue,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Params;
+
+    // The uniform reaches the GPU as raw bytes, so the new field has to sit in
+    // the padding the struct already had rather than growing it.
+    #[test]
+    fn coverage_gamma_sits_in_the_old_padding() {
+        assert_eq!(std::mem::size_of::<Params>(), 16);
+        assert_eq!(std::mem::offset_of!(Params, coverage_gamma), 8);
+    }
+
+    // Nothing here runs WGSL, so the shader's own text is what gets checked.
+    #[test]
+    fn the_shader_applies_the_coverage_gamma() {
+        let src = include_str!("shader.wgsl");
+        assert!(src.contains("coverage_gamma: f32,"), "params field");
+        assert!(
+            src.contains("pow(coverage, params.coverage_gamma)"),
+            "mask arm"
+        );
+    }
 }

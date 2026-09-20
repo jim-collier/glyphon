@@ -23,7 +23,8 @@ impl Viewport {
                 width: 0,
                 height: 0,
             },
-            _pad: [0, 0],
+            coverage_gamma: 1.0,
+            _pad: 0,
         };
 
         let params_buffer = device.create_buffer(&BufferDescriptor {
@@ -46,14 +47,36 @@ impl Viewport {
     pub fn update(&mut self, queue: &Queue, resolution: Resolution) {
         if self.params.screen_resolution != resolution {
             self.params.screen_resolution = resolution;
-
-            queue.write_buffer(&self.params_buffer, 0, unsafe {
-                slice::from_raw_parts(
-                    &self.params as *const Params as *const u8,
-                    mem::size_of::<Params>(),
-                )
-            });
+            self.write(queue);
         }
+    }
+
+    /// Sets the exponent applied to glyph coverage before it becomes alpha.
+    ///
+    /// The default, 1.0, leaves coverage as the rasterizer produced it. A value
+    /// below 1.0 raises partly covered pixels, which is what dark text on a
+    /// light background needs when the two are blended in linear light: without
+    /// it a half covered pixel carries far less ink than the eye expects, and
+    /// the text reads thin. A value above 1.0 does the reverse.
+    pub fn set_coverage_gamma(&mut self, queue: &Queue, gamma: f32) {
+        if self.params.coverage_gamma != gamma {
+            self.params.coverage_gamma = gamma;
+            self.write(queue);
+        }
+    }
+
+    /// Returns the exponent applied to glyph coverage.
+    pub fn coverage_gamma(&self) -> f32 {
+        self.params.coverage_gamma
+    }
+
+    fn write(&self, queue: &Queue) {
+        queue.write_buffer(&self.params_buffer, 0, unsafe {
+            slice::from_raw_parts(
+                &self.params as *const Params as *const u8,
+                mem::size_of::<Params>(),
+            )
+        });
     }
 
     /// Returns the current resolution of the `Viewport`.
