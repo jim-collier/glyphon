@@ -67,7 +67,9 @@ impl Viewport {
     /// `fg` and `bg` are sRGB grays of the same brightness as the real colors,
     /// since one alpha has to serve all three channels. `blend` is how much of
     /// the correction to apply; 0 leaves coverage exactly as it was, which is
-    /// also what happens when `fg` is not darker than `bg`.
+    /// also what happens when `fg` is not darker than `bg`. Above 1 it carries
+    /// on past the sRGB blend, for a caller that wants more weight than the
+    /// font itself has.
     pub fn set_text_blend(&mut self, queue: &Queue, fg: f32, bg: f32, blend: f32) {
         if (self.params.text_fg, self.params.text_bg, self.params.text_blend) != (fg, bg, blend) {
             self.params.text_fg = fg;

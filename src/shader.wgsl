@@ -139,13 +139,15 @@ fn fs_main(in_frag: VertexOutput) -> @location(0) vec4<f32> {
             // is still encoded exactly once, at the surface.
             //
             // fg < bg is both the case this is for and what keeps the divisor
-            // away from zero. text_blend 0 leaves coverage bit-for-bit alone.
+            // away from zero. text_blend 0 leaves coverage bit-for-bit alone,
+            // and past 1.0 it carries on past the sRGB blend into weight the
+            // font never asked for - which is why the result is clamped.
             if params.text_blend != 0.0 && params.text_fg < params.text_bg {
                 let fg_l = srgb_to_linear(params.text_fg);
                 let bg_l = srgb_to_linear(params.text_bg);
                 let blended = coverage * params.text_fg + (1.0 - coverage) * params.text_bg;
                 let matched = clamp((srgb_to_linear(blended) - bg_l) / (fg_l - bg_l), 0.0, 1.0);
-                coverage = mix(coverage, matched, params.text_blend);
+                coverage = clamp(mix(coverage, matched, params.text_blend), 0.0, 1.0);
             }
             return vec4<f32>(in_frag.color.rgb, in_frag.color.a * coverage);
         }

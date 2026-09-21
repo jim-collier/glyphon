@@ -158,7 +158,7 @@ mod tests {
         let (fg_l, bg_l) = (srgb_to_linear(fg), srgb_to_linear(bg));
         let blended = coverage * fg + (1.0 - coverage) * bg;
         let matched = ((srgb_to_linear(blended) - bg_l) / (fg_l - bg_l)).clamp(0.0, 1.0);
-        coverage + (matched - coverage) * blend
+        (coverage + (matched - coverage) * blend).clamp(0.0, 1.0)
     }
 
     // The uniform reaches the GPU as raw bytes, so the layout is pinned. It was
@@ -201,13 +201,20 @@ mod tests {
         }
     }
 
-    // A partial blend sits between the two, and the ends are exact.
+    // A partial blend sits between the two, and the ends are exact. Past 1.0
+    // it carries on, so a caller can ask for more weight than the font has -
+    // and the result still has to be an alpha.
     #[test]
-    fn a_partial_blend_sits_between_the_two() {
+    fn a_partial_blend_sits_between_the_two_and_a_big_one_carries_on() {
         let (fg, bg) = (0.0, 1.0);
         let half = corrected(0.5, fg, bg, 0.5);
         assert!(half > 0.5 && half < corrected(0.5, fg, bg, 1.0));
         assert_eq!(corrected(0.5, fg, bg, 0.0), 0.5);
+        assert!(corrected(0.5, fg, bg, 2.0) > corrected(0.5, fg, bg, 1.0));
+        for coverage in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            let a = corrected(coverage, fg, bg, 4.0);
+            assert!((0.0..=1.0).contains(&a), "coverage {coverage} gave {a}");
+        }
     }
 
     // Nothing here runs WGSL, so the shader's own text is what holds the mirror
@@ -222,7 +229,7 @@ mod tests {
             "params.text_blend != 0.0 && params.text_fg < params.text_bg",
             "coverage * params.text_fg + (1.0 - coverage) * params.text_bg",
             "clamp((srgb_to_linear(blended) - bg_l) / (fg_l - bg_l), 0.0, 1.0)",
-            "mix(coverage, matched, params.text_blend)",
+            "clamp(mix(coverage, matched, params.text_blend), 0.0, 1.0)",
         ] {
             assert!(src.contains(want), "shader is missing `{want}`");
         }
