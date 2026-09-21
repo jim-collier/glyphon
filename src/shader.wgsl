@@ -17,8 +17,14 @@ struct VertexOutput {
 
 struct Params {
     screen_resolution: vec2<u32>,
-    coverage_gamma: f32,
-    _pad: u32,
+    // The text and its background as sRGB grays of the same brightness, and
+    // how much of the coverage correction to apply. See the fragment stage.
+    text_fg: f32,
+    text_bg: f32,
+    text_blend: f32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 };
 
 @group(0) @binding(0)
@@ -123,11 +129,23 @@ fn fs_main(in_frag: VertexOutput) -> @location(0) vec4<f32> {
             var coverage = textureSampleLevel(mask_atlas_texture, atlas_sampler, in_frag.uv, 0.0).x;
             // Coverage blends in whatever space the target is in. On a linear
             // target, dark text on a light background loses its partly covered
-            // pixels and reads thin, while light on dark gains. A gamma below
-            // 1.0 gives those pixels back. The branch keeps the untouched case
-            // bit-for-bit what it was.
-            if params.coverage_gamma != 1.0 {
-                coverage = pow(coverage, params.coverage_gamma);
+            // pixels and reads thin, while light on dark gains. Almost every
+            // other program blends text in sRGB, and that is the weight the
+            // font was drawn for.
+            //
+            // So find the alpha that lands where an sRGB blend of the pair
+            // would have: blend there, decode, and read off how far between
+            // the two the answer sits. The output stays linear, so the target
+            // is still encoded exactly once, at the surface.
+            //
+            // fg < bg is both the case this is for and what keeps the divisor
+            // away from zero. text_blend 0 leaves coverage bit-for-bit alone.
+            if params.text_blend != 0.0 && params.text_fg < params.text_bg {
+                let fg_l = srgb_to_linear(params.text_fg);
+                let bg_l = srgb_to_linear(params.text_bg);
+                let blended = coverage * params.text_fg + (1.0 - coverage) * params.text_bg;
+                let matched = clamp((srgb_to_linear(blended) - bg_l) / (fg_l - bg_l), 0.0, 1.0);
+                coverage = mix(coverage, matched, params.text_blend);
             }
             return vec4<f32>(in_frag.color.rgb, in_frag.color.a * coverage);
         }

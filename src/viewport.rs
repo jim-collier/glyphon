@@ -23,8 +23,10 @@ impl Viewport {
                 width: 0,
                 height: 0,
             },
-            coverage_gamma: 1.0,
-            _pad: 0,
+            text_fg: 0.0,
+            text_bg: 0.0,
+            text_blend: 0.0,
+            _pad: [0; 3],
         };
 
         let params_buffer = device.create_buffer(&BufferDescriptor {
@@ -51,23 +53,37 @@ impl Viewport {
         }
     }
 
-    /// Sets the exponent applied to glyph coverage before it becomes alpha.
+    /// Bends glyph coverage so the finished pixel lands where an sRGB blend of
+    /// `fg` over `bg` would have put it.
     ///
-    /// The default, 1.0, leaves coverage as the rasterizer produced it. A value
-    /// below 1.0 raises partly covered pixels, which is what dark text on a
-    /// light background needs when the two are blended in linear light: without
-    /// it a half covered pixel carries far less ink than the eye expects, and
-    /// the text reads thin. A value above 1.0 does the reverse.
-    pub fn set_coverage_gamma(&mut self, queue: &Queue, gamma: f32) {
-        if self.params.coverage_gamma != gamma {
-            self.params.coverage_gamma = gamma;
+    /// On a linear target, coverage blends in linear light: a half covered
+    /// pixel comes out near three quarters brightness whichever way round the
+    /// two colors are. That is a strong edge on a dark background and hardly
+    /// any ink on a light one, so dark text reads a weight lighter than the
+    /// font was drawn for. Almost every other program blends text in sRGB, and
+    /// this puts the result back there without a second encode: the output is
+    /// still linear and the target is encoded once, at the surface.
+    ///
+    /// `fg` and `bg` are sRGB grays of the same brightness as the real colors,
+    /// since one alpha has to serve all three channels. `blend` is how much of
+    /// the correction to apply; 0 leaves coverage exactly as it was, which is
+    /// also what happens when `fg` is not darker than `bg`.
+    pub fn set_text_blend(&mut self, queue: &Queue, fg: f32, bg: f32, blend: f32) {
+        if (self.params.text_fg, self.params.text_bg, self.params.text_blend) != (fg, bg, blend) {
+            self.params.text_fg = fg;
+            self.params.text_bg = bg;
+            self.params.text_blend = blend;
             self.write(queue);
         }
     }
 
-    /// Returns the exponent applied to glyph coverage.
-    pub fn coverage_gamma(&self) -> f32 {
-        self.params.coverage_gamma
+    /// Returns the text pair and blend amount coverage is corrected with.
+    pub fn text_blend(&self) -> (f32, f32, f32) {
+        (
+            self.params.text_fg,
+            self.params.text_bg,
+            self.params.text_blend,
+        )
     }
 
     fn write(&self, queue: &Queue) {

@@ -132,7 +132,7 @@ impl Cache {
         let uniforms_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             entries: &[BindGroupLayoutEntry {
                 binding: 0,
-                // The fragment stage reads coverage_gamma out of the same buffer.
+                // The fragment stage reads the text blend out of the same buffer.
                 visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT,
                 ty: BindingType::Buffer {
                     ty: BufferBindingType::Uniform,

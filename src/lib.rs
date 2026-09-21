@@ -73,14 +73,17 @@ pub struct Resolution {
 }
 
 #[repr(C)]
-// No Eq: coverage_gamma is a float. Nothing compares the whole struct.
+// No Eq: the three text fields are floats. Nothing compares the whole struct.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Params {
     screen_resolution: Resolution,
-    /// Exponent applied to mask-atlas coverage before it becomes alpha. 1.0
-    /// leaves coverage alone; below 1.0 thickens partly covered pixels.
-    coverage_gamma: f32,
-    _pad: u32,
+    /// The text and its background as sRGB grays of the same brightness, and
+    /// how much of the coverage correction to apply. 0 leaves coverage as the
+    /// rasterizer produced it. See `Viewport::set_text_blend`.
+    text_fg: f32,
+    text_bg: f32,
+    text_blend: f32,
+    _pad: [u32; 3],
 }
 
 /// Controls the visible area of the text. Any text outside of the visible area will be clipped.
@@ -137,22 +140,91 @@ pub(crate) struct State<'a> {
 mod tests {
     use super::Params;
 
-    // The uniform reaches the GPU as raw bytes, so the new field has to sit in
-    // the padding the struct already had rather than growing it.
-    #[test]
-    fn coverage_gamma_sits_in_the_old_padding() {
-        assert_eq!(std::mem::size_of::<Params>(), 16);
-        assert_eq!(std::mem::offset_of!(Params, coverage_gamma), 8);
+    fn srgb_to_linear(c: f32) -> f32 {
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
     }
 
-    // Nothing here runs WGSL, so the shader's own text is what gets checked.
+    // The mask arm of the fragment stage, in Rust. Nothing here runs WGSL, so
+    // the curve is checked through this and the shader's own text is held
+    // against it below.
+    fn corrected(coverage: f32, fg: f32, bg: f32, blend: f32) -> f32 {
+        if blend == 0.0 || fg >= bg {
+            return coverage;
+        }
+        let (fg_l, bg_l) = (srgb_to_linear(fg), srgb_to_linear(bg));
+        let blended = coverage * fg + (1.0 - coverage) * bg;
+        let matched = ((srgb_to_linear(blended) - bg_l) / (fg_l - bg_l)).clamp(0.0, 1.0);
+        coverage + (matched - coverage) * blend
+    }
+
+    // The uniform reaches the GPU as raw bytes, so the layout is pinned. It was
+    // 16 with the one exponent field in the old padding; the pair plus the
+    // amount take a second 16.
+    //   assert_eq!(std::mem::size_of::<Params>(), 16);
+    //   assert_eq!(std::mem::offset_of!(Params, coverage_gamma), 8);
     #[test]
-    fn the_shader_applies_the_coverage_gamma() {
+    fn the_text_fields_follow_the_resolution() {
+        assert_eq!(std::mem::size_of::<Params>(), 32);
+        assert_eq!(std::mem::offset_of!(Params, text_fg), 8);
+        assert_eq!(std::mem::offset_of!(Params, text_bg), 12);
+        assert_eq!(std::mem::offset_of!(Params, text_blend), 16);
+    }
+
+    // The whole point: at full blend the composite is what an sRGB blend of the
+    // pair would have been, which is the weight the font was drawn for.
+    #[test]
+    fn a_full_blend_matches_an_srgb_blend() {
+        let (fg, bg) = (0.196, 0.960); // SilkTerm's light theme, as grays
+        let (fg_l, bg_l) = (srgb_to_linear(fg), srgb_to_linear(bg));
+        for step in 0u8..=20 {
+            let coverage = f32::from(step) / 20.0;
+            let a = corrected(coverage, fg, bg, 1.0);
+            let out = a * fg_l + (1.0 - a) * bg_l;
+            let want = srgb_to_linear(coverage * fg + (1.0 - coverage) * bg);
+            assert!(
+                (out - want).abs() < 1e-5,
+                "coverage {coverage}: {out} against {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn nothing_is_corrected_without_a_blend_or_against_lighter_text() {
+        for coverage in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            assert_eq!(corrected(coverage, 0.2, 0.9, 0.0), coverage);
+            assert_eq!(corrected(coverage, 0.9, 0.2, 1.0), coverage);
+            assert_eq!(corrected(coverage, 0.5, 0.5, 1.0), coverage);
+        }
+    }
+
+    // A partial blend sits between the two, and the ends are exact.
+    #[test]
+    fn a_partial_blend_sits_between_the_two() {
+        let (fg, bg) = (0.0, 1.0);
+        let half = corrected(0.5, fg, bg, 0.5);
+        assert!(half > 0.5 && half < corrected(0.5, fg, bg, 1.0));
+        assert_eq!(corrected(0.5, fg, bg, 0.0), 0.5);
+    }
+
+    // Nothing here runs WGSL, so the shader's own text is what holds the mirror
+    // above honest.
+    #[test]
+    fn the_shader_matches_the_mirror() {
         let src = include_str!("shader.wgsl");
-        assert!(src.contains("coverage_gamma: f32,"), "params field");
-        assert!(
-            src.contains("pow(coverage, params.coverage_gamma)"),
-            "mask arm"
-        );
+        for want in [
+            "text_fg: f32,",
+            "text_bg: f32,",
+            "text_blend: f32,",
+            "params.text_blend != 0.0 && params.text_fg < params.text_bg",
+            "coverage * params.text_fg + (1.0 - coverage) * params.text_bg",
+            "clamp((srgb_to_linear(blended) - bg_l) / (fg_l - bg_l), 0.0, 1.0)",
+            "mix(coverage, matched, params.text_blend)",
+        ] {
+            assert!(src.contains(want), "shader is missing `{want}`");
+        }
     }
 }
