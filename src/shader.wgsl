@@ -133,7 +133,7 @@ fn fs_main(in_frag: VertexOutput) -> @location(0) vec4<f32> {
             // other program blends text in sRGB, and that is the weight the
             // font was drawn for.
             //
-            // So find the alpha that lands where an sRGB blend of the pair
+            // So find the alpha that comes out where an sRGB blend of the pair
             // would have: blend there, decode, and read off how far between
             // the two the answer sits. The output stays linear, so the target
             // is still encoded exactly once, at the surface.

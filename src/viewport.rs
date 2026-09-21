@@ -53,7 +53,7 @@ impl Viewport {
         }
     }
 
-    /// Bends glyph coverage so the finished pixel lands where an sRGB blend of
+    /// Bends glyph coverage so the finished pixel comes out where an sRGB blend of
     /// `fg` over `bg` would have put it.
     ///
     /// On a linear target, coverage blends in linear light: a half covered
