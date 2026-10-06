@@ -83,7 +83,9 @@ pub(crate) struct Params {
     text_fg: f32,
     text_bg: f32,
     text_blend: f32,
-    _pad: [u32; 3],
+    /// Contrast boost ahead of the correction. See `Viewport::set_text_contrast`.
+    text_contrast: f32,
+    _pad: [u32; 2],
 }
 
 /// Controls the visible area of the text. Any text outside of the visible area will be clipped.
@@ -152,11 +154,16 @@ mod tests {
     // the curve is checked through this and the shader's own text is held
     // against it below.
     fn corrected(coverage: f32, fg: f32, bg: f32, blend: f32) -> f32 {
+        boosted(coverage, fg, bg, blend, 0.0)
+    }
+
+    fn boosted(coverage: f32, fg: f32, bg: f32, blend: f32, contrast: f32) -> f32 {
         if blend == 0.0 || fg >= bg {
             return coverage;
         }
         let (fg_l, bg_l) = (srgb_to_linear(fg), srgb_to_linear(bg));
-        let blended = coverage * fg + (1.0 - coverage) * bg;
+        let lifted = coverage * (contrast + 1.0) / (coverage * contrast + 1.0);
+        let blended = lifted * fg + (1.0 - lifted) * bg;
         let matched = ((srgb_to_linear(blended) - bg_l) / (fg_l - bg_l)).clamp(0.0, 1.0);
         (coverage + (matched - coverage) * blend).clamp(0.0, 1.0)
     }
@@ -172,6 +179,7 @@ mod tests {
         assert_eq!(std::mem::offset_of!(Params, text_fg), 8);
         assert_eq!(std::mem::offset_of!(Params, text_bg), 12);
         assert_eq!(std::mem::offset_of!(Params, text_blend), 16);
+        assert_eq!(std::mem::offset_of!(Params, text_contrast), 20);
     }
 
     // The whole point: at full blend the composite is what an sRGB blend of the
@@ -217,6 +225,29 @@ mod tests {
         }
     }
 
+    // The boost thickens the partly covered pixels only: none of them gets
+    // lighter, the ends stay put, and 0 is the plain correction.
+    #[test]
+    fn the_contrast_boost_adds_ink_between_the_ends() {
+        let (fg, bg) = (0.05, 0.96);
+        for contrast in [0.5f32, 1.0, 2.0, 4.0] {
+            assert_eq!(boosted(0.0, fg, bg, 1.0, contrast), 0.0);
+            assert_eq!(boosted(1.0, fg, bg, 1.0, contrast), 1.0);
+            for step in 1u8..20 {
+                let coverage = f32::from(step) / 20.0;
+                let plain = corrected(coverage, fg, bg, 1.0);
+                let more = boosted(coverage, fg, bg, 1.0, contrast);
+                assert!(more > plain, "{contrast} at {coverage}: {more} not past {plain}");
+                assert!(more <= 1.0);
+                assert!(boosted(coverage, fg, bg, 1.0, contrast * 1.5) >= more);
+            }
+        }
+        assert_eq!(boosted(0.4, fg, bg, 1.0, 0.0), corrected(0.4, fg, bg, 1.0));
+        // Like the correction, it only ever touches dark on light.
+        assert_eq!(boosted(0.4, bg, fg, 1.0, 2.0), 0.4);
+        assert_eq!(boosted(0.4, fg, bg, 0.0, 2.0), 0.4);
+    }
+
     // Nothing here runs WGSL, so the shader's own text is what holds the mirror
     // above honest.
     #[test]
@@ -226,8 +257,13 @@ mod tests {
             "text_fg: f32,",
             "text_bg: f32,",
             "text_blend: f32,",
-            "params.text_blend != 0.0 && params.text_fg < params.text_bg",
-            "coverage * params.text_fg + (1.0 - coverage) * params.text_bg",
+            "text_contrast: f32,",
+            "params.text_blend != 0.0 && params.text_fg < params.text_bg && in_frag.dark_ink == 1u",
+            "let k = params.text_contrast;",
+            "let lifted = coverage * (k + 1.0) / (coverage * k + 1.0);",
+            "lifted * params.text_fg + (1.0 - lifted) * params.text_bg",
+            "let pivot = srgb_to_linear(0.5 * (params.text_fg + params.text_bg));",
+            "vert_output.dark_ink = select(0u, 1u, ink_l < pivot);",
             "clamp((srgb_to_linear(blended) - bg_l) / (fg_l - bg_l), 0.0, 1.0)",
             "clamp(mix(coverage, matched, params.text_blend), 0.0, 1.0)",
         ] {

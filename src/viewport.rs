@@ -26,7 +26,8 @@ impl Viewport {
             text_fg: 0.0,
             text_bg: 0.0,
             text_blend: 0.0,
-            _pad: [0; 3],
+            text_contrast: 0.0,
+            _pad: [0; 2],
         };
 
         let params_buffer = device.create_buffer(&BufferDescriptor {
@@ -69,12 +70,30 @@ impl Viewport {
     /// the correction to apply; 0 leaves coverage exactly as it was, which is
     /// also what happens when `fg` is not darker than `bg`. Above 1 it carries
     /// on past the sRGB blend, for a caller that wants more weight than the
-    /// font itself has.
+    /// font itself has. A glyph whose own color is lighter than the gray halfway
+    /// between the pair is left alone, so a light label drawn in the same pass
+    /// keeps its weight.
     pub fn set_text_blend(&mut self, queue: &Queue, fg: f32, bg: f32, blend: f32) {
         if (self.params.text_fg, self.params.text_bg, self.params.text_blend) != (fg, bg, blend) {
             self.params.text_fg = fg;
             self.params.text_bg = bg;
             self.params.text_blend = blend;
+            self.write(queue);
+        }
+    }
+
+    /// Lifts the partly covered pixels of dark-on-light text ahead of the
+    /// correction `set_text_blend` asks for, by `coverage * (k + 1) / (coverage * k + 1)`.
+    ///
+    /// Light text on a dark background looks heavier than the same letters the
+    /// other way round, whatever the blend. Desktop text renderers make up for it
+    /// the same way, DirectWrite as enhanced contrast and Skia as its contrast
+    /// boost. 0 leaves the correction as it was. It goes only where the
+    /// correction does, and only to glyphs whose own color is darker than the
+    /// gray halfway between the pair.
+    pub fn set_text_contrast(&mut self, queue: &Queue, k: f32) {
+        if self.params.text_contrast != k {
+            self.params.text_contrast = k;
             self.write(queue);
         }
     }

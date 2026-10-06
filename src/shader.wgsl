@@ -13,16 +13,21 @@ struct VertexOutput {
     @location(0) color: vec4<f32>,
     @location(1) uv: vec2<f32>,
     @location(2) @interpolate(flat) content_type: u32,
+    // 1 when the glyph's own color is on the text's side of the pair, so text
+    // in some other color, such as a light label on a dark strip, keeps the
+    // coverage it was drawn with.
+    @location(3) @interpolate(flat) dark_ink: u32,
 };
 
 struct Params {
     screen_resolution: vec2<u32>,
-    // The text and its background as sRGB grays of the same brightness, and
-    // how much of the coverage correction to apply. See the fragment stage.
+    // The text and its background as sRGB grays of the same brightness, how
+    // much of the coverage correction to apply, and the contrast boost that
+    // goes in ahead of it. See the fragment stage.
     text_fg: f32,
     text_bg: f32,
     text_blend: f32,
-    _pad0: u32,
+    text_contrast: f32,
     _pad1: u32,
     _pad2: u32,
 };
@@ -114,6 +119,17 @@ fn vs_main(in_vert: VertexInput) -> VertexOutput {
 
     vert_output.content_type = content_type;
 
+    // Judged on the color as sRGB bytes in either color mode, against the gray
+    // halfway between the pair.
+    let ink = vec3<f32>(
+        srgb_to_linear(f32((color & 0x00ff0000u) >> 16u) / 255.0),
+        srgb_to_linear(f32((color & 0x0000ff00u) >> 8u) / 255.0),
+        srgb_to_linear(f32(color & 0x000000ffu) / 255.0),
+    );
+    let ink_l = dot(ink, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let pivot = srgb_to_linear(0.5 * (params.text_fg + params.text_bg));
+    vert_output.dark_ink = select(0u, 1u, ink_l < pivot);
+
     vert_output.uv = vec2<f32>(uv) / vec2<f32>(dim);
 
     return vert_output;
@@ -142,10 +158,17 @@ fn fs_main(in_frag: VertexOutput) -> @location(0) vec4<f32> {
             // away from zero. text_blend 0 leaves coverage bit-for-bit alone,
             // and past 1.0 it carries on past the sRGB blend into weight the
             // font never asked for - which is why the result is clamped.
-            if params.text_blend != 0.0 && params.text_fg < params.text_bg {
+            //
+            // Light on dark looks heavier than dark on light at the same
+            // coverage, so text_contrast lifts the partly covered pixels
+            // first, the curve DirectWrite calls enhanced contrast. 0 is off,
+            // and the ends stay where they are.
+            if params.text_blend != 0.0 && params.text_fg < params.text_bg && in_frag.dark_ink == 1u {
                 let fg_l = srgb_to_linear(params.text_fg);
                 let bg_l = srgb_to_linear(params.text_bg);
-                let blended = coverage * params.text_fg + (1.0 - coverage) * params.text_bg;
+                let k = params.text_contrast;
+                let lifted = coverage * (k + 1.0) / (coverage * k + 1.0);
+                let blended = lifted * params.text_fg + (1.0 - lifted) * params.text_bg;
                 let matched = clamp((srgb_to_linear(blended) - bg_l) / (fg_l - bg_l), 0.0, 1.0);
                 coverage = clamp(mix(coverage, matched, params.text_blend), 0.0, 1.0);
             }
