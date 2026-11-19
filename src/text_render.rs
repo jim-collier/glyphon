@@ -322,6 +322,7 @@ impl TextRenderer {
 
             let (buffer, buffer_size) = create_oversized_buffer(
                 device,
+                queue,
                 Some("glyphon vertices"),
                 vertices_raw,
                 BufferUsages::VERTEX | BufferUsages::COPY_DST,
@@ -373,8 +374,11 @@ fn next_copy_buffer_size(size: u64) -> u64 {
     ((size.next_power_of_two() + align_mask) & !align_mask).max(COPY_BUFFER_ALIGNMENT)
 }
 
+// A buffer made on a lost device is invalid. Mapping it panics in wgpu whatever
+// the error handler is, but write_buffer only reports an error.
 fn create_oversized_buffer(
     device: &Device,
+    queue: &Queue,
     label: Option<&str>,
     contents: &[u8],
     usage: BufferUsages,
@@ -384,13 +388,9 @@ fn create_oversized_buffer(
         label,
         size,
         usage,
-        mapped_at_creation: true,
+        mapped_at_creation: false,
     });
-    buffer
-        .slice(..contents.len() as u64)
-        .get_mapped_range_mut()
-        .copy_from_slice(contents);
-    buffer.unmap();
+    queue.write_buffer(&buffer, 0, contents);
     (buffer, size)
 }
 
